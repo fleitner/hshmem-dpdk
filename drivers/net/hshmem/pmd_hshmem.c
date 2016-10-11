@@ -110,7 +110,7 @@ get_va_align(struct rte_ring *prev, size_t size, int align)
 static int
 get_phys_map(void *va, phys_addr_t pa[], uint32_t pg_num, uint32_t pg_sz)
 {
-	int32_t fd, rc;
+	int32_t fd;
 	uint32_t i, nb;
 	off_t ofs;
 
@@ -118,13 +118,14 @@ get_phys_map(void *va, phys_addr_t pa[], uint32_t pg_num, uint32_t pg_sz)
 	nb = pg_num * sizeof(*pa);
 
 	if ((fd = open("/proc/self/pagemap", O_RDONLY)) < 0)
-		return (ENOENT);
+		return ENOENT;
 
 	if ((rc = pread(fd, pa, nb, ofs)) < 0 || (rc -= nb) != 0) {
 		RTE_LOG(ERR, PMD, "failed read of %u bytes from pagemap "
 			"at offset %zu, error code: %d\n",
 			nb, (size_t)ofs, errno);
-		rc = ENOENT;
+		close(fd);
+		return ENOENT;
 	}
 
 	close(fd);
@@ -133,7 +134,7 @@ get_phys_map(void *va, phys_addr_t pa[], uint32_t pg_num, uint32_t pg_sz)
 		pa[i] = (pa[i] & PAGEMAP_PFN_MASK) * pg_sz;
 	}
 
-	return (rc);
+	return 0;
 }
 
 static int
