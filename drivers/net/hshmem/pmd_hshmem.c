@@ -110,7 +110,7 @@ get_va_align(struct rte_ring *prev, size_t size, int align)
 static int
 get_phys_map(void *va, phys_addr_t pa[], uint32_t pg_num, uint32_t pg_sz)
 {
-	int32_t fd;
+	int32_t rc, fd;
 	uint32_t i, nb;
 	off_t ofs;
 
