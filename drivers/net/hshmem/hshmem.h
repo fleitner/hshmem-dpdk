@@ -34,6 +34,13 @@
 #define HSHMEM_MAGIC 0xCODECAFE
 #define HSHMEM_VERSION 0x00000001
 
+#define HSHMEM_MTU 1500
+#define VLAN_HLEN 4
+#define HSHMEM_MAX_FRAME_LEN (HSHMEM_MTU + ETHER_HDR_LEN + \
+			      ETHER_CRC_LEN + VLAN_HLEN)
+#define HSHMEM_MIN_FRAME_LEN 60
+#define HSHMEM_MAX_PACKETS 1024
+
 /*
  * Shared memory area mapping
  * From guest point of view
@@ -76,8 +83,9 @@ struct hshmem_header {
 } __attribute__((__packed__));
 
 struct hshmem_pkt {
+	char packet[HSHMEM_MAX_FRAME_LEN];
+	uint32_t reserved;
 	uint32_t len;
-	char data[0];
 } __attribute__((__packed__));
 
 /* RX direction:

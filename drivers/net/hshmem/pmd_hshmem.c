@@ -29,18 +29,20 @@
  *
  */
 
-#include <rte_log.h>
 
+#include <rte_log.h>
 #include <rte_ethdev.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_tailq.h>
+#include <rte_pci.h>
 
 #include "pmd_hshmem.h"
 #include "hshmem.h"
 
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/user.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -57,12 +59,6 @@
 #define HSHMEM_TXQ_MAX 1
 #define HSHMEM_RXQ_MAX 1
 
-#define HSHMEM_MTU 1500
-#define HSHMEM_MAX_FRAME_LEN (HSHMEM_MTU + ETHER_HDR_LEN \
-			      + ETHER_CRC_LEN + VLAN_TAG_SIZE)
-#define HSHMEM_MIN_FRAME_LEN 60
-#define HSHMEM_MAX_PACKETS 1024
-
 #define HSHMEM_LINK_FULL_DUPLEX 2
 #define HSHMEM_LINK_SPEED_10G 10000
 
@@ -71,19 +67,20 @@ struct hshmem_adapter {
 	struct rte_ring *rxfreering;
 	struct rte_ring *txring;
 	struct rte_ring *txfreering;
-	int stopped;
 	struct rte_mempool *mp;
+	int stopped;
 	struct hshmem_header *header;
-	struct ether_addr mac_addr;
+	uint8_t mac_addr[ETHER_ADDR_LEN];
 	void *ivshmem;
+	phys_addr_t *pa;
+	void *va;
 };
-RTE_BUILD_BUG_ON(sizeof(struct hshmem_adapter) > PAGE_SIZE);
+/* FIXME: RTE_BUILD_BUG_ON(sizeof(struct hshmem_adapter) > PAGE_SIZE); */
 
 struct hshmem_pkt_pmd {
-	struct rte_mbuf *mb;
 	struct hshmem_pkt pkt;
+	struct rte_mbuf *mbuf;
 } __attribute__((__packed__));
-RTE_BUILD_BUG_ON(sizeof(struct hshmem_pkt_pmd) > RTE_PKTMBUF_HEADROOM);
 
 static struct hshmem_adapter *
 get_adapter(struct rte_eth_dev *eth_dev)
@@ -92,11 +89,53 @@ get_adapter(struct rte_eth_dev *eth_dev)
 }
 
 static struct rte_ring *
-get_ptr_align(struct rte_ring *ring, size_t size, int align)
+get_ptr_align(struct rte_ring *prev, size_t size, int align)
 {
-	return RTE_PTR_ALIGN(RTE_PTR_ADD(ivshmem, size), align);
+	return RTE_PTR_ALIGN(RTE_PTR_ADD(prev, size), align);
 }
- 
+
+static void *
+get_va_align(struct rte_ring *prev, size_t size, int align)
+{
+	return RTE_PTR_ALIGN(RTE_PTR_ADD(prev, size), align);
+}
+
+/*
+ * the pfn (page frame number) are bits 0-54 (see pagemap.txt in linux
+ * Documentation).
+ */
+#define	PAGEMAP_PFN_BITS	54
+#define	PAGEMAP_PFN_MASK	RTE_LEN2MASK(PAGEMAP_PFN_BITS, phys_addr_t)
+
+static int
+get_phys_map(void *va, phys_addr_t pa[], uint32_t pg_num, uint32_t pg_sz)
+{
+	int32_t fd, rc;
+	uint32_t i, nb;
+	off_t ofs;
+
+	ofs = (uintptr_t)va / pg_sz * sizeof(*pa);
+	nb = pg_num * sizeof(*pa);
+
+	if ((fd = open("/proc/self/pagemap", O_RDONLY)) < 0)
+		return (ENOENT);
+
+	if ((rc = pread(fd, pa, nb, ofs)) < 0 || (rc -= nb) != 0) {
+		RTE_LOG(ERR, PMD, "failed read of %u bytes from pagemap "
+			"at offset %zu, error code: %d\n",
+			nb, (size_t)ofs, errno);
+		rc = ENOENT;
+	}
+
+	close(fd);
+
+	for (i = 0; i != pg_num; i++) {
+		pa[i] = (pa[i] & PAGEMAP_PFN_MASK) * pg_sz;
+	}
+
+	return (rc);
+}
+
 static int
 hshmem_dev_configure(__rte_unused struct rte_eth_dev *dev)
 {
@@ -110,13 +149,8 @@ hshmem_dev_start(struct rte_eth_dev *dev)
 {
 	struct hshmem_adapter *adapter = get_adapter(dev);
 
-	/* invalidate */
-	adapter->nic->hdr.valid = 0;
-	barrier();
-	/* reset */
-	adapter->nic->hdr.reset = 1;
-	/* no need to wait here */
-	adapter->up_idx = adapter->down_idx = 0;
+	adapter->stopped = 0;
+	/* FIXME: barrier? */
 
 	return 0;
 }
@@ -127,6 +161,7 @@ hshmem_dev_stop(struct rte_eth_dev *dev)
 	struct hshmem_adapter *adapter = get_adapter(dev);
 
 	adapter->stopped = 1;
+	/* FIXME: barrier? */
 
 	return;
 }
@@ -174,7 +209,7 @@ hshmem_dev_rx_queue_setup(__rte_unused struct rte_eth_dev *dev,
 			  __rte_unused struct rte_mempool *mb_pool)
 {
 	/* Multiqueue not supported */
-	HSHMEM_DEBUG("rxq: %p id: %d socket: %d\n", q, rx_queue_id, socket_id);
+	HSHMEM_DEBUG("dev %p rxq %d socket: %d\n", dev, rx_queue_id, socket_id);
 	return 0;
 }
 
@@ -183,7 +218,6 @@ hshmem_dev_rx_queue_release(void *rxq)
 {
 	/* Multiqueue not supported */
 	HSHMEM_DEBUG("rxq: %p\n", rxq);
-	return 0;
 }
 
 static int
@@ -194,7 +228,7 @@ hshmem_dev_tx_queue_setup(struct rte_eth_dev *dev,
 			  __rte_unused const struct rte_eth_txconf *tx_conf)
 {
 	/* Multiqueue not supported */
-	HSHMEM_DEBUG("dev: %p id: %d socket: %d\n", q, tx_queue_id, socket_id);
+	HSHMEM_DEBUG("dev: %p id: %d socket: %d\n", dev, tx_queue_id, socket_id);
 	return 0;
 }
 
@@ -222,8 +256,11 @@ static struct eth_dev_ops hshmem_eth_dev_ops = {
 };
 
 static uint16_t
-hshmem_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
+hshmem_recv_pkts(__rte_unused void *rx_queue,
+		 __rte_unused struct rte_mbuf **rx_pkts,
+		 __rte_unused uint16_t nb_pkts)
 {
+#if 0
 	struct hshmem_queue *q = (struct hshmem_queue *)rx_queue;
 	struct hshmem_adapter *adapter = q->adapter;
 	struct hshmem_data *data = &adapter->nic->up;
@@ -262,11 +299,16 @@ hshmem_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	adapter->up_idx = idx;
 
 	return nr;
+#endif
+	return 0;
 }
 
 static uint16_t
-hshmem_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
+hshmem_xmit_pkts(__rte_unused void *tx_queue,
+		 __rte_unused struct rte_mbuf **tx_pkts,
+		 __rte_unused uint16_t nb_pkts)
 {
+#if 0
        struct hshmem_queue *q = (struct hshmem_queue *)tx_queue;
        struct hshmem_adapter *adapter = q->adapter;
        struct hshmem_data *data = &adapter->nic->down;
@@ -309,10 +351,12 @@ retry:
        }
 
        return nr;
+#endif
+	return 0;
 }
 
 static int
-hshmem_eth_dev_uninit(struct rte_eth_dev *eth_dev)
+hshmem_eth_dev_uninit(__rte_unused struct rte_eth_dev *eth_dev)
 {
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY)
 		return -EPERM;
@@ -321,78 +365,42 @@ hshmem_eth_dev_uninit(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-static int
-hshmem_eth_dev_init(struct rte_eth_dev *eth_dev)
+static void
+hshmem_set_macaddr(struct rte_eth_dev *eth_dev)
 {
-	struct hshmem_adapter *adapter;
-	struct rte_pci_device *pci_dev;
-	char path[PATH_MAX];
-	void  *ivshmem; 
-	unsigned int ring_flags;
-	size_t ring_size;
+	struct hshmem_adapter *adapter = get_adapter(eth_dev);
+
+	eth_random_addr(&adapter->mac_addr[0]);
+	ether_addr_copy((struct ether_addr *)adapter->mac_addr,
+			&eth_dev->data->mac_addrs[0]);
+}
+
+static int
+hshmem_init_queue_rings(struct hshmem_adapter *adapter)
+{
+	unsigned int ring_flags = RING_F_SP_ENQ | RING_F_SC_DEQ;
+	size_t ring_size = rte_ring_get_memsize(HSHMEM_MAX_PACKETS);
 	size_t size;
 	int ret;
 
-
-	eth_dev->dev_ops = &hshmem_eth_dev_ops;
-	eth_dev->rx_pkt_burst = &hshmem_recv_pkts;
-	eth_dev->tx_pkt_burst = &hshmem_xmit_pkts;
-
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-                return 0;
-	}
-
-	pci_dev = eth_dev->pci_dev;
-	rte_eth_copy_pci_info(eth_dev, pci_dev);
-
-	rte_snprintf(path, sizeof(path),
-		     SYSFS_PCI_DEVICES "/" PCI_PRI_FMT "/resource2",
-		     dev->addr.domain, dev->addr.bus,
-		     dev->addr.devid, dev->addr.function);
-
-	adapter = get_adapter(eth_dev);
-	adapter->stopped = 0
-
-	ret = open(path, O_RDWR);
-	if (ret < 0) {
-		HSHMEM_DEBUG("Not found %s\n", path);
-		return -ENODEV;
-	}
-	ivshmem = mmap(NULL, HSHMEM_IVSHMEM_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED,
-	 	       ret, 0);
-	if (ivshmem == MAP_FAILED) {
-		HSHMEM_DEBUG("Unable to mmap %d\n", errno);
-		close(ret);
-		return -ENODEV;
-	}
-	close(ret);
-
-	adapter->ivshmem = ivshmem;
-	adapter->header = ivshmem;
-	
-	eth_random_addr(&adapter->mac_addr[0]);
-	ether_addr_copy(adapter->mac_addr, &eth_dev->data->mac_addrs[0]);
-
 	/* RX Ring */
-	ring_flags = RING_F_SP_ENQ | RING_F_SC_DEQ;
-	adapter->rxring = get_ptr_align(ivshmem, PAGE_SIZE, PAGE_SIZE);
+	adapter->rxring = get_ptr_align(adapter->ivshmem, PAGE_SIZE, PAGE_SIZE);
 	ret = rte_ring_init(adapter->rxring, "hshmem_rxring",
 			    HSHMEM_MAX_PACKETS, ring_flags);
 	if (ret < 0) {
-		HSHMEM_DEBUG("Unable initialize rxring %d\n", ret);
-		return -ENODEV;
+		RTE_LOG(ERR, PMD, "Unable initialize rxring %d\n", ret);
+		return ret;
 	}
 
 	/* RX Free Ring */
-	ring_size = rte_ring_get_memsize(HSHMEM_MAX_PACKETS);
 	size = ring_size + RTE_CACHE_LINE_SIZE;
 	adapter->rxfreering = get_ptr_align(adapter->rxring, size,
 					    RTE_CACHE_LINE_SIZE);
 	ret = rte_ring_init(adapter->rxfreering, "hshmem_rxfreering",
 			    HSHMEM_MAX_PACKETS, ring_flags);
 	if (ret < 0) {
-		HSHMEM_DEBUG("Unable initialize rxfreering %d\n", ret);
-		return -ENODEV;
+		RTE_LOG(ERR, PMD, "Unable initialize rxfreering %d\n", ret);
+		return ret;
 	}
 
 	/* TX Ring */
@@ -401,8 +409,8 @@ hshmem_eth_dev_init(struct rte_eth_dev *eth_dev)
 	ret = rte_ring_init(adapter->txring, "hshmem_txring",
 			    HSHMEM_MAX_PACKETS, ring_flags);
 	if (ret < 0) {
-		HSHMEM_DEBUG("Unable initialize txring %d\n", ret);
-		return -ENODEV;
+		RTE_LOG(ERR, PMD, "Unable initialize txring %d\n", ret);
+		return ret;
 	}
 
 	/* TX Free Ring */
@@ -411,14 +419,127 @@ hshmem_eth_dev_init(struct rte_eth_dev *eth_dev)
 	ret = rte_ring_init(adapter->txfreering, "hshmem_txfreering",
 			    HSHMEM_MAX_PACKETS, ring_flags);
 	if (ret < 0) {
-		HSHMEM_DEBUG("Unable initialize txfreering %d\n", ret);
-		return -ENODEV;
+		RTE_LOG(ERR, PMD, "Unable initialize txfreering %d\n", ret);
+		return ret;
 	}
 
-	adapter->mp = get_ptr_align(adapter->txfreering, size, PAGE_SIZE);
-	
+	/* the mp is located right after txfreering */
+	adapter->va = get_va_align(adapter->txfreering, size, PAGE_SIZE);
 
 	return 0;
+}
+
+static int
+hshmem_init_mempool(struct hshmem_adapter *adapter)
+{
+	unsigned int flags = 0; /* MEMPOOL_F_NO_SPREAD? */
+	struct rte_mempool *mp;
+	uint32_t pg_num, pg_shift, pg_sz, total_size;
+	uint32_t elt_size = sizeof(struct hshmem_pkt_pmd);
+	uint32_t elt_num;
+	size_t sz;
+	phys_addr_t *pa;
+	void *va = adapter->va;
+
+	pg_sz = getpagesize();
+	pg_shift = rte_bsf32(pg_sz);
+	total_size = rte_mempool_calc_obj_size(elt_size, flags, NULL);
+
+	/*
+	 * FIXME: estimate according with available mem
+	 * 4 busy rings + 1 extra ring for app in-flight
+	 */
+	elt_num = HSHMEM_MAX_PACKETS * 5;
+
+	/* calc max memory size and max number of pages needed. */
+	sz = rte_mempool_xmem_size(elt_num, total_size, pg_shift);
+	pg_num = sz >> pg_shift;
+
+	/* extract physical mappings of the allocated memory. */
+	pa = calloc(pg_num, sizeof (*pa));
+	if (!pa) {
+		RTE_LOG(ERR, PMD, "Unable to calloc phys\n");
+		return -ENOMEM;
+	}
+
+	adapter->pa = pa;
+	if (!get_phys_map(va, pa, pg_num, pg_sz)) {
+		RTE_LOG(ERR, PMD, "Unable to get phys mapping\n");
+		return -ENOMEM;
+	}
+
+	mp = rte_mempool_xmem_create("hshmem_ivshmem", elt_num, elt_size,
+				     0, 0, NULL, NULL, NULL, NULL,
+				     0, 0, va, pa, pg_num, pg_shift);
+	if (!mp) {
+		free(pa);
+		RTE_LOG(ERR, PMD, "Unable to allocate mempool\n");
+		return -ENOMEM;
+	}
+
+	RTE_VERIFY(elt_num == mp->size);
+	adapter->mp = mp;
+
+	return 0;
+}
+
+
+static int
+hshmem_eth_dev_init(struct rte_eth_dev *eth_dev)
+{
+	struct hshmem_adapter *adapter;
+	struct rte_pci_device *pci_dev;
+	char path[PATH_MAX];
+	void  *ivshmem;
+	int fd;
+	int ret;
+
+
+	eth_dev->dev_ops = &hshmem_eth_dev_ops;
+	eth_dev->rx_pkt_burst = &hshmem_recv_pkts;
+	eth_dev->tx_pkt_burst = &hshmem_xmit_pkts;
+
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		return 0;
+	}
+
+	pci_dev = eth_dev->pci_dev;
+	rte_eth_copy_pci_info(eth_dev, pci_dev);
+
+	snprintf(path, sizeof(path),
+		 SYSFS_PCI_DEVICES "/" PCI_PRI_FMT "/resource2",
+		 pci_dev->addr.domain, pci_dev->addr.bus,
+		 pci_dev->addr.devid, pci_dev->addr.function);
+
+	adapter = get_adapter(eth_dev);
+	adapter->stopped = 0;
+
+	fd = open(path, O_RDWR);
+	if (fd < 0) {
+		HSHMEM_DEBUG("Unable to open %s: %d\n", path, fd);
+		return fd;
+	}
+
+	ivshmem = mmap(NULL, HSHMEM_IVSHMEM_SIZE, PROT_READ | PROT_WRITE,
+		       MAP_SHARED | MAP_LOCKED, fd, 0);
+	close(fd);
+	if (ivshmem == MAP_FAILED) {
+		HSHMEM_DEBUG("Unable to mmap %d\n", errno);
+		return -EINVAL;
+	}
+
+	adapter->ivshmem = ivshmem;
+	adapter->header = ivshmem;
+
+	hshmem_set_macaddr(eth_dev);
+
+	ret = hshmem_init_queue_rings(adapter);
+	if (ret < 0)
+		return ret;
+
+	ret = hshmem_init_mempool(adapter);
+
+	return ret;
 }
 
 static struct rte_pci_id pci_id_hshmem_map[] = {
@@ -443,9 +564,8 @@ static struct eth_driver rte_hshmem_pmd = {
 	.dev_private_size = sizeof(struct hshmem_adapter),
 };
 
-extern struct pci_device_list device_list;
-
-static void eth_hshmem_probe(struct rte_pci_device *dev)
+static void
+eth_hshmem_probe(struct rte_pci_device *dev)
 {
 	char path[PATH_MAX];
 
@@ -458,31 +578,32 @@ static void eth_hshmem_probe(struct rte_pci_device *dev)
 		     dev->addr.domain, dev->addr.bus,
 		     dev->addr.devid, dev->addr.function);
 
-	rte_snprintf(path, sizeof(path),
-		     SYSFS_PCI_DEVICES "/" PCI_PRI_FMT "/driver",
-		     dev->addr.domain, dev->addr.bus,
-		     dev->addr.devid, dev->addr.function);
+	snprintf(path, sizeof(path),
+		 SYSFS_PCI_DEVICES "/" PCI_PRI_FMT "/driver",
+		 dev->addr.domain, dev->addr.bus,
+		 dev->addr.devid, dev->addr.function);
 	if (access(path, F_OK) == 0) {
-		RTE_LOG(ERR, PMD,
-			"%s: Device is bound to kernel driver\n",
-			dev->data->name);
+		RTE_LOG(ERR, PMD, "Device is bound to kernel driver\n");
 		return;
 	}
 
 	rte_hshmem_pmd.pci_drv.devinit(&rte_hshmem_pmd.pci_drv, dev);
 }
 
-int rte_hshmem_probe(void)
+int
+rte_hshmem_probe(void)
 {
 	struct rte_pci_device *dev = NULL;
 
-	TAILQ_FOREACH(dev, &device_list, next)
+	TAILQ_FOREACH(dev, &pci_device_list, next) {
 		eth_hshmem_probe(dev);
+	}
 
 	return 0;
 }
 
-int rte_hshmem_pmd_init(void)
+int
+rte_hshmem_pmd_init(void)
 {
 	rte_eth_driver_register(&rte_hshmem_pmd);
 
