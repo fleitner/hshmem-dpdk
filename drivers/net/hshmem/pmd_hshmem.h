@@ -31,8 +31,4 @@
 
 #ifndef DPDK_PMD_HSHMEM
 #define DPDK_PMD_HSHMEM
-
-int rte_hshmem_pmd_init(void);
-int rte_hshmem_probe(void);
-
 #endif /* DPDK_PMD_HSHMEM */

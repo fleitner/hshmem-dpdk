@@ -564,6 +564,25 @@ static struct eth_driver rte_hshmem_pmd = {
 	.dev_private_size = sizeof(struct hshmem_adapter),
 };
 
+static int
+rte_hshmem_pmd_init(const char *name __rte_unused,
+		    const char *param __rte_unused)
+{
+	rte_eth_driver_register(&rte_hshmem_pmd);
+
+	return 0;
+}
+
+static struct rte_driver rte_hshmem_driver = {
+	.type = PMD_PDEV,
+	.init = rte_hshmem_pmd_init,
+};
+
+PMD_REGISTER_DRIVER(rte_hshmem_driver);
+
+
+
+#if 0
 static void
 eth_hshmem_probe(struct rte_pci_device *dev)
 {
@@ -601,11 +620,6 @@ rte_hshmem_probe(void)
 
 	return 0;
 }
+#endif
 
-int
-rte_hshmem_pmd_init(void)
-{
-	rte_eth_driver_register(&rte_hshmem_pmd);
 
-	return 0;
-}
