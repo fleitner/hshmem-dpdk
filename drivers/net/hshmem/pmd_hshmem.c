@@ -371,8 +371,7 @@ hshmem_set_macaddr(struct rte_eth_dev *eth_dev)
 	struct hshmem_adapter *adapter = get_adapter(eth_dev);
 
 	eth_random_addr(&adapter->mac_addr[0]);
-	ether_addr_copy((struct ether_addr *)adapter->mac_addr,
-			&eth_dev->data->mac_addrs[0]);
+	eth_dev->data->mac_addrs = (struct ether_addr *)adapter->mac_addr;
 }
 
 static int
