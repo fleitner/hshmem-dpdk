@@ -120,15 +120,14 @@ get_phys_map(void *va, phys_addr_t pa[], uint32_t pg_num, uint32_t pg_sz)
 	if ((fd = open("/proc/self/pagemap", O_RDONLY)) < 0)
 		return ENOENT;
 
-	if ((rc = pread(fd, pa, nb, ofs)) < 0 || (rc -= nb) != 0) {
+	rc = pread(fd, pa, nb, ofs);
+	close(fd);
+	if (rc < 0 || (rc -= nb) != 0) {
 		RTE_LOG(ERR, PMD, "failed read of %u bytes from pagemap "
 			"at offset %zu, error code: %d\n",
 			nb, (size_t)ofs, errno);
-		close(fd);
 		return ENOENT;
 	}
-
-	close(fd);
 
 	for (i = 0; i != pg_num; i++) {
 		pa[i] = (pa[i] & PAGEMAP_PFN_MASK) * pg_sz;
@@ -440,6 +439,7 @@ hshmem_init_mempool(struct hshmem_adapter *adapter)
 	size_t sz;
 	phys_addr_t *pa;
 	void *va = adapter->va;
+	int rc;
 
 	pg_sz = getpagesize();
 	pg_shift = rte_bsf32(pg_sz);
@@ -463,9 +463,10 @@ hshmem_init_mempool(struct hshmem_adapter *adapter)
 	}
 
 	adapter->pa = pa;
-	if (!get_phys_map(va, pa, pg_num, pg_sz)) {
+	rc = get_phys_map(va, pa, pg_num, pg_sz);
+	if (rc) {
 		RTE_LOG(ERR, PMD, "Unable to get phys mapping\n");
-		return -ENOMEM;
+		return rc;
 	}
 
 	mp = rte_mempool_xmem_create("hshmem_ivshmem", elt_num, elt_size,
