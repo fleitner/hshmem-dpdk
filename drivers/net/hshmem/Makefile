@@ -48,12 +48,9 @@ LIBABIVER := 1
 #
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += pmd_hshmem.c
 
-# FIXME:
-# this lib depends upon:
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_AF_PACKET) += lib/librte_eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_AF_PACKET) += lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_AF_PACKET) += lib/librte_mempool
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_AF_PACKET) += lib/librte_ether
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_AF_PACKET) += lib/librte_kvargs
+DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_eal
+DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_mbuf
+DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_mempool
+DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_ether
 
 include $(RTE_SDK)/mk/rte.lib.mk
