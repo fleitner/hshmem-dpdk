@@ -28,3 +28,67 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <rte_log.h>
+#include <rte_ethdev.h>
+#include <rte_malloc.h>
+#include <rte_memcpy.h>
+
+#include "rte_hshmem.h"
+
+#include <sys/stat.h>
+#include <sys/user.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <errno.h>
+
+
+struct rte_hshmem {
+	struct rte_ring *rxring;
+	struct rte_ring *rxfreering;
+	struct rte_ring *txring;
+	struct rte_ring *txfreering;
+	int stopped;
+	struct hshmem_header *header;
+	uint8_t mac_addr[ETHER_ADDR_LEN];
+	void *ivshmem;
+};
+
+
+struct rte_hshmem *
+rte_hshmem_open_shmem(const char *path)
+{
+	/* file exists? */
+	/* open the file */
+	/* mmap the file */
+	/* close the fd */
+	/* read the header */
+	/* sanity check */
+	/* return the opaque handler */
+	return NULL;
+}
+
+void
+rte_hshmem_close(struct rte_hshmem *hshmem)
+{
+	free(hshmem->ivshmem);
+	free(hshmem);
+}
+
+int
+rte_hshmem_get_carrier(struct rte_hshmem *hshmem)
+{
+	return hshmem->stopped ? 1 : 0;
+}
+
+int
+rte_hshmem_tx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts)
+{
+
+}
+
+int
+rte_hshmem_rx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts)
+{
+
+}

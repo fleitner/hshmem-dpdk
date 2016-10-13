@@ -103,5 +103,12 @@ struct hshmem_pkt {
  * Host enqueues unused buffers to txfreering.
  */ 
 
+struct rte_hshmem;
+
+struct rte_hshmem * rte_hshmem_open_shmem(const char *path);
+void rte_hshmem_close(struct rte_hshmem *hshmem);
+int rte_hshmem_get_carrier(struct rte_hshmem *hshmem);
+int rte_hshmem_tx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts);
+int rte_hshmem_rx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts);
 
 #endif /* __HSHMEM_H__ */

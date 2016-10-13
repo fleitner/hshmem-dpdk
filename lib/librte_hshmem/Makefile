@@ -46,6 +46,8 @@ SYMLINK-$(CONFIG_RTE_LIBRTE_HSHMEM)-include := rte_hshmem.h
 
 
 # dependencies
-#DEPDIRS-$(CONFIG_RTE_LIBRTE_VHOST) += lib/librte_eal
+DEPDIRS-$(CONFIG_RTE_LIBRTE_HSHMEM) += lib/librte_eal
+DEPDIRS-$(CONFIG_RTE_LIBRTE_HSHMEM) += lib/librte_ether
+DEPDIRS-$(CONFIG_RTE_LIBRTE_HSHMEM) += lib/librte_mbuf
 
 include $(RTE_SDK)/mk/rte.lib.mk
