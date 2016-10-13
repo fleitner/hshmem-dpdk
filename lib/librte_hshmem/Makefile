@@ -1,6 +1,6 @@
 #   BSD LICENSE
 #
-#   Copyright(c) 2016 Flavio Leitner <fbl@redhat.com>
+#   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
 #   All rights reserved.
 #
 #   Redistribution and use in source and binary forms, with or without
@@ -31,27 +31,21 @@
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
-#
 # library name
-#
-LIB = librte_pmd_hshmem.a
+LIB = librte_hshmem.a
 
-CFLAGS += -O3
-CFLAGS += $(WERROR_FLAGS)
-
-EXPORT_MAP := rte_pmd_hshmem_version.map
+EXPORT_MAP := rte_hshmem_version.map
 
 LIBABIVER := 1
 
-#
 # all source are stored in SRCS-y
-#
-SRCS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += pmd_hshmem.c
+SRCS-$(CONFIG_RTE_LIBRTE_HSHMEM) := rte_hshmem.c
 
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_eal
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_mbuf
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_mempool
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_ether
-DEPDIRS-$(CONFIG_RTE_LIBRTE_PMD_HSHMEM) += lib/librte_hshmem
+# install includes
+SYMLINK-$(CONFIG_RTE_LIBRTE_HSHMEM)-include := rte_hshmem.h
+
+
+# dependencies
+#DEPDIRS-$(CONFIG_RTE_LIBRTE_VHOST) += lib/librte_eal
 
 include $(RTE_SDK)/mk/rte.lib.mk

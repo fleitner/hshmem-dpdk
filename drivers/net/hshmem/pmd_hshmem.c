@@ -37,8 +37,8 @@
 #include <rte_tailq.h>
 #include <rte_pci.h>
 
+#include <rte_hshmem.h>
 #include "pmd_hshmem.h"
-#include "hshmem.h"
 #include "rte_bulk.h"
 
 #include <sys/mman.h>
