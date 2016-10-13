@@ -31,7 +31,7 @@
 #ifndef __HSHMEM_H__
 #define __HSHMEM_H__
 
-#define HSHMEM_MAGIC 0xCODECAFE
+#define HSHMEM_MAGIC 0xC0DECAFE
 #define HSHMEM_VERSION 0x00000001
 
 #define HSHMEM_MTU 1500

@@ -104,6 +104,12 @@ get_va_align(struct rte_ring *prev, size_t size, int align)
 	return RTE_PTR_ALIGN(RTE_PTR_ADD(prev, size), align);
 }
 
+static uint32_t
+get_ring_offset(struct hshmem_adapter *adapter, struct rte_ring *ring)
+{
+	return (char *)ring - (char *)adapter->ivshmem;
+}
+
 static struct hshmem_pkt_pmd *
 __get_pkt_pmd(struct rte_mbuf *mbuf)
 {
@@ -448,6 +454,28 @@ hshmem_init_queue_rings(struct hshmem_adapter *adapter)
 }
 
 static int
+hshmem_init_header(struct hshmem_adapter *adapter)
+{
+	struct hshmem_header *header = adapter->ivshmem;
+
+	memset(header, 0, sizeof(struct hshmem_header));
+	header->sequential = 1;
+	header->version = HSHMEM_VERSION;
+	header->rxring_offset = get_ring_offset(adapter, adapter->rxring);
+	header->rxfreering_offset = get_ring_offset(adapter,
+						    adapter->rxfreering);
+
+	header->txring_offset = get_ring_offset(adapter, adapter->txring);
+	header->txfreering_offset = get_ring_offset(adapter,
+						    adapter->txfreering);
+	rte_wmb();
+	header->magic = HSHMEM_MAGIC;
+
+	return 0;
+
+}
+
+static int
 hshmem_init_mempool(struct hshmem_adapter *adapter)
 {
 	unsigned int flags = 0; /* MEMPOOL_F_NO_SPREAD? */
@@ -549,7 +577,6 @@ hshmem_eth_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	adapter->ivshmem = ivshmem;
-	adapter->header = ivshmem;
 
 	hshmem_set_macaddr(eth_dev);
 
@@ -558,6 +585,8 @@ hshmem_eth_dev_init(struct rte_eth_dev *eth_dev)
 		return ret;
 
 	ret = hshmem_init_mempool(adapter);
+
+	hshmem_init_header(adapter);
 
 	return ret;
 }
