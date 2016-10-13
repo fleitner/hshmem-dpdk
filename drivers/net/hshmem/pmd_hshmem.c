@@ -39,6 +39,7 @@
 
 #include "pmd_hshmem.h"
 #include "hshmem.h"
+#include "rte_bulk.h"
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -61,6 +62,9 @@
 
 #define HSHMEM_LINK_FULL_DUPLEX 2
 #define HSHMEM_LINK_SPEED_10G 10000
+
+#define RING_FREE_THRESHOLD 255
+#define MAX_BURST 64
 
 struct hshmem_adapter {
 	struct rte_ring *rxring;
@@ -98,6 +102,25 @@ static void *
 get_va_align(struct rte_ring *prev, size_t size, int align)
 {
 	return RTE_PTR_ALIGN(RTE_PTR_ADD(prev, size), align);
+}
+
+static struct hshmem_pkt_pmd *
+__get_pkt_pmd(struct rte_mbuf *mbuf)
+{
+	return (struct hshmem_pkt_pmd *)rte_mbuf_to_baddr(mbuf);
+
+}
+
+static struct hshmem_pkt_pmd *
+hshmem_get_pkt_pmd(struct rte_mbuf *mbuf)
+{
+	struct hshmem_pkt_pmd *pkt = __get_pkt_pmd(mbuf);
+
+	pkt->pkt.reserved = 0;
+	pkt->pkt.len = rte_pktmbuf_pkt_len(mbuf);
+	pkt->mbuf = mbuf;
+
+	return pkt;
 }
 
 /*
@@ -167,8 +190,7 @@ hshmem_dev_stop(struct rte_eth_dev *dev)
 }
 
 static void
-hshmem_dev_infos_get(__rte_unused struct rte_eth_dev *dev,
-		     struct rte_eth_dev_info *dev_info)
+hshmem_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
 	dev_info->driver_name = dev->driver->pci_drv.name;
 	dev_info->max_rx_queues = HSHMEM_RXQ_MAX;
@@ -182,11 +204,13 @@ static void
 hshmem_dev_stats_get(__rte_unused struct rte_eth_dev *dev,
 		     __rte_unused struct rte_eth_stats *stats)
 {
+	/* FIXME: Implement */
 }
 
 static void
 hshmem_dev_stats_reset(__rte_unused struct rte_eth_dev *dev)
 {
+	/* FIXME: Implement */
 }
 
 static int
@@ -201,8 +225,7 @@ hshmem_dev_link_update(struct rte_eth_dev *dev,
 }
 
 static int
-hshmem_dev_rx_queue_setup(__rte_unused struct rte_eth_dev *dev,
-			  uint16_t rx_queue_id,
+hshmem_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 			  __rte_unused uint16_t nb_rx_desc,
 			  __rte_unused unsigned int socket_id,
 			  __rte_unused const struct rte_eth_rxconf *rx_conf,
@@ -210,32 +233,42 @@ hshmem_dev_rx_queue_setup(__rte_unused struct rte_eth_dev *dev,
 {
 	/* Multiqueue not supported */
 	HSHMEM_DEBUG("dev %p rxq %d socket: %d\n", dev, rx_queue_id, socket_id);
+
+	if (rx_queue_id != 0)
+		return -EINVAL;
+
+	dev->data->rx_queues[rx_queue_id] = get_adapter(dev);
+
 	return 0;
 }
 
 static void
 hshmem_dev_rx_queue_release(void *rxq)
 {
-	/* Multiqueue not supported */
-	HSHMEM_DEBUG("rxq: %p\n", rxq);
+	HSHMEM_DEBUG("hshmem rxq release %p\n", rxq);
 }
 
 static int
-hshmem_dev_tx_queue_setup(struct rte_eth_dev *dev,
-			  uint16_t tx_queue_id,
+hshmem_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 			  __rte_unused uint16_t nb_tx_desc,
-			  unsigned int socket_id,
+			  __rte_unused unsigned int socket_id,
 			  __rte_unused const struct rte_eth_txconf *tx_conf)
 {
 	/* Multiqueue not supported */
 	HSHMEM_DEBUG("dev: %p id: %d socket: %d\n", dev, tx_queue_id, socket_id);
+
+	if (tx_queue_id != 0)
+		return -EINVAL;
+
+	dev->data->tx_queues[tx_queue_id] = get_adapter(dev);
+
 	return 0;
 }
 
 static void
-hshmem_dev_tx_queue_release(__rte_unused void *txq)
+hshmem_dev_tx_queue_release(void *txq)
 {
-	/* Multiqueue not supported */
+	HSHMEM_DEBUG("hshmem txq release %p\n", txq);
 	return;
 }
 
@@ -255,104 +288,90 @@ static struct eth_dev_ops hshmem_eth_dev_ops = {
 	.tx_queue_release       = hshmem_dev_tx_queue_release,
 };
 
-static uint16_t
-hshmem_recv_pkts(__rte_unused void *rx_queue,
-		 __rte_unused struct rte_mbuf **rx_pkts,
-		 __rte_unused uint16_t nb_pkts)
+static inline uint16_t
+hshmem_refill_ring(struct rte_mempool *mp, struct rte_ring *ring, int nb_pkts)
 {
-#if 0
-	struct hshmem_queue *q = (struct hshmem_queue *)rx_queue;
-	struct hshmem_adapter *adapter = q->adapter;
-	struct hshmem_data *data = &adapter->nic->up;
-	struct hshmem_packet *p;
-	struct rte_mbuf *mb;
-	uint16_t nr;
-	int idx;
+	struct rte_mbuf *pkts[MAX_BURST];
+	int n;
+	int bsize;
+	int fbufs;
 
-	if (!adapter->nic->hdr.valid)
-		return 0;
-
-	idx = adapter->up_idx;
-	for (nr = 0; nr < nb_pkts; nr++) {
-		p = &data->packets[idx];
-		if (p->status != HSHMEM_PKT_ST_FILLED)
-			break;
-		mb = rte_pktmbuf_alloc(adapter->mp);
-		if (!mb)
-			break;
-
-		rte_memcpy(rte_pktmbuf_mtod(mb, void *), p->data, p->len);
-		mb->pkt.in_port = q->port_id;
-		mb->pkt.nb_segs = 1;
-		mb->pkt.next = NULL;
-		mb->pkt.pkt_len = p->len;
-		mb->pkt.data_len = p->len;
-		rx_pkts[nr] = mb;
-
-		barrier();
-		p->status = HSHMEM_PKT_ST_FREE;
-
-		if (++idx >= HSHMEM_NR_PACKET)
-			idx = 0;
+	n = 0;
+	while (n < nb_pkts) {
+		bsize = RTE_MIN(nb_pkts - n, MAX_BURST);
+		fbufs = rte_pktmbuf_alloc_bulk(mp, pkts, bsize);
+		rte_ring_sp_enqueue_bulk(ring, (void **)pkts, fbufs);
+		n += fbufs;
 	}
 
-	adapter->up_idx = idx;
-
-	return nr;
-#endif
-	return 0;
+	return n;
 }
 
 static uint16_t
-hshmem_xmit_pkts(__rte_unused void *tx_queue,
-		 __rte_unused struct rte_mbuf **tx_pkts,
-		 __rte_unused uint16_t nb_pkts)
+hshmem_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
-#if 0
-       struct hshmem_queue *q = (struct hshmem_queue *)tx_queue;
-       struct hshmem_adapter *adapter = q->adapter;
-       struct hshmem_data *data = &adapter->nic->down;
-       struct hshmem_packet *p;
-       uint16_t nr;
-       int idx, old;
+	static struct hshmem_pkt_pmd *hshpkt[MAX_BURST];
+	struct hshmem_adapter *adapter = (struct hshmem_adapter *)rx_queue;
+	struct rte_ring *rx = adapter->rxring;
+	struct rte_ring *rxfree = adapter->rxfreering;
+	uint16_t idx;
+	uint16_t ndq;
 
-       if (!adapter->nic->hdr.valid)
-               return 0;
+	if (!adapter->stopped)
+		return 0;
 
-       for (nr = 0; nr < nb_pkts; nr++) {
-               int len = rte_pktmbuf_data_len(tx_pkts[nr]);
-               if (len > HSHMEM_MAX_FRAME_LEN)
-                       break;
-retry:
-               idx = ACCESS_ONCE(adapter->down_idx);
-               p = &data->packets[idx];
-               old = cmpxchg(&p->status, HSHMEM_PKT_ST_FREE, HSHMEM_PKT_ST_USED
-);
-               if (old != HSHMEM_PKT_ST_FREE) {
-                       if (old == HSHMEM_PKT_ST_FILLED &&
-                                       idx == ACCESS_ONCE(adapter->down_idx)) {
-                               break;
-                       }
-                       goto retry;
-               }
+	if (nb_pkts > MAX_BURST)
+		nb_pkts = MAX_BURST;
 
-               if (++idx >= HSHMEM_NR_PACKET)
-                       idx = 0;
-               adapter->down_idx = idx;
+	ndq = rte_ring_sc_dequeue_burst(rx, (void **)hshpkt, nb_pkts);
+	for (idx = 0; idx < ndq; idx++) {
+		rx_pkts[idx] = hshpkt[idx]->mbuf;
+		rx_pkts[idx]->pkt_len = hshpkt[idx]->pkt.len;
+		rx_pkts[idx]->data_len = hshpkt[idx]->pkt.len;
+		rx_pkts[idx]->next = NULL;
+	}
 
-               p->len = len;
+	if (rte_ring_free_count(rxfree) > RING_FREE_THRESHOLD)
+		hshmem_refill_ring(adapter->mp, rxfree, RING_FREE_THRESHOLD);
 
-               rte_memcpy(p->data, rte_pktmbuf_mtod(tx_pkts[nr], void *), len);
+	return ndq;
+}
 
-               barrier();
-               p->status = HSHMEM_PKT_ST_FILLED;
+static uint16_t
+hshmem_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
+{
+	struct hshmem_adapter *adapter = (struct hshmem_adapter *)tx_queue;
+	struct rte_ring *tx = adapter->txring;
+	struct rte_ring *txfree = adapter->txfreering;
+	struct rte_mbuf *mbuf;
+	struct hshmem_pkt_pmd *pkt;
+	uint16_t i;
+	uint16_t cnt;
 
-               rte_pktmbuf_free(tx_pkts[nr]);
-       }
+	if (!adapter->stopped)
+		return 0;
 
-       return nr;
-#endif
-	return 0;
+	cnt = 0;
+	i = 0;
+	while (i < nb_pkts) {
+		mbuf = tx_pkts[i++];
+		pkt = hshmem_get_pkt_pmd(mbuf);
+		if (rte_ring_sp_enqueue(tx, pkt)) {
+			rte_pktmbuf_free(mbuf);
+			continue;
+		}
+
+		cnt++;
+	}
+
+	i = RTE_MIN(rte_ring_count(txfree), (unsigned int)RING_FREE_THRESHOLD);
+	while (i > 0) {
+		rte_ring_sc_dequeue(txfree, (void **)&mbuf);
+		rte_pktmbuf_free(mbuf);
+		i--;
+	}
+
+	return cnt;
 }
 
 static int
