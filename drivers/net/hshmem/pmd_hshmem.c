@@ -55,8 +55,6 @@
 #define HSHMEM_VENDOR_ID 0x1AF4
 #define HSHMEM_DEVICE_ID 0x1110
 
-#define HSHMEM_IVSHMEM_SIZE (16 * 1024 * 1024)
-
 #define HSHMEM_TXQ_MAX 1
 #define HSHMEM_RXQ_MAX 1
 
@@ -104,6 +102,7 @@ get_va_align(struct rte_ring *prev, size_t size, int align)
 	return RTE_PTR_ALIGN(RTE_PTR_ADD(prev, size), align);
 }
 
+/* FIXME: move to the lib */
 static uint32_t
 get_ring_offset(struct hshmem_adapter *adapter, struct rte_ring *ring)
 {

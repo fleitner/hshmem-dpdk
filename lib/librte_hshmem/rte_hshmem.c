@@ -36,6 +36,7 @@
 #include "rte_hshmem.h"
 
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/user.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -50,28 +51,68 @@ struct rte_hshmem {
 	struct rte_ring *txfreering;
 	int stopped;
 	struct hshmem_header *header;
-	uint8_t mac_addr[ETHER_ADDR_LEN];
+	uint8_t mac_addr[ETHER_ADDR_LEN]; /* FIXME: not used */
 	void *ivshmem;
 };
-
+static struct rte_ring *
+get_ring_ptr(struct rte_hshmem *hshmem, uint32_t offset)
+{
+	char *ptr = (char *)hshmem->ivshmem + offset;
+	return (struct rte_ring *)ptr;
+}
 
 struct rte_hshmem *
 rte_hshmem_open_shmem(const char *path)
 {
-	/* file exists? */
-	/* open the file */
-	/* mmap the file */
-	/* close the fd */
-	/* read the header */
-	/* sanity check */
-	/* return the opaque handler */
-	return NULL;
+	struct rte_hshmem *hshmem;
+	struct hshmem_header *header;
+	void *ivshmem;
+	int fd;
+
+	fd = open(path, O_RDWR);
+	if (fd == -1)
+		goto out;
+
+	hshmem = rte_malloc("rte_hshmem", sizeof(struct rte_hshmem),
+			    RTE_CACHE_LINE_SIZE);
+	if (!hshmem)
+		goto out;
+
+	ivshmem = mmap(NULL, HSHMEM_IVSHMEM_SIZE, PROT_READ | PROT_WRITE,
+		       MAP_SHARED | MAP_LOCKED, fd, 0);
+
+	close(fd);
+
+	if (!ivshmem)
+		goto err_mmap;
+
+	header = ivshmem;
+	if (header->magic != HSHMEM_MAGIC ||
+	    header->version != HSHMEM_VERSION)
+		goto err_supp;
+
+	hshmem->ivshmem = ivshmem;
+	hshmem->header = header;
+	hshmem->stopped = 0;
+	hshmem->rxring = get_ring_ptr(hshmem, header->rxring_offset);
+	hshmem->rxfreering = get_ring_ptr(hshmem, header->rxfreering_offset);
+	hshmem->txring = get_ring_ptr(hshmem, header->txring_offset);
+	hshmem->txfreering = get_ring_ptr(hshmem, header->txfreering_offset);
+
+out:
+	return hshmem;
+
+err_supp:
+	munmap(ivshmem, HSHMEM_IVSHMEM_SIZE);
+err_mmap:
+	rte_free(hshmem);
+	goto out;
 }
 
 void
 rte_hshmem_close(struct rte_hshmem *hshmem)
 {
-	free(hshmem->ivshmem);
+	munmap(hshmem->ivshmem, HSHMEM_IVSHMEM_SIZE);
 	free(hshmem);
 }
 
