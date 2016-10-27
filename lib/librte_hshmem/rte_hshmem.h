@@ -42,6 +42,7 @@
 			      ETHER_CRC_LEN + VLAN_HLEN)
 #define HSHMEM_MIN_FRAME_LEN 60
 #define HSHMEM_MAX_PACKETS 1024
+#define HSHMEM_MAX_BURST 64
 
 /*
  * Shared memory area mapping
@@ -51,7 +52,7 @@
  * +------------------+
  * | Padding          |
  * +------------------+
- * | RX Ring          | 
+ * | RX Ring          |
  * +------------------+
  * | Padding          |
  * +------------------+
@@ -59,7 +60,7 @@
  * +------------------+
  * | Padding          |
  * +------------------+
- * | TX Ring          | 
+ * | TX Ring          |
  * +------------------+
  * | Padding          |
  * +------------------+
@@ -78,10 +79,10 @@ struct hshmem_header {
 	uint32_t sequential;		/* data versioning */
 	uint32_t features;		/* list of features in the guest */
 	uint32_t reserved;		/* not used */
-	uint32_t rxring_offset;		/* offset to rxring */
-	uint32_t rxfreering_offset;	/* offset to free entries */
-	uint32_t txring_offset;		/* offset to txring */
-	uint32_t txfreering_offset;	/* offset to free entries */
+	uintptr_t rxring_offset;		/* offset to rxring */
+	uintptr_t rxfreering_offset;	/* offset to free entries */
+	uintptr_t txring_offset;		/* offset to txring */
+	uintptr_t txfreering_offset;	/* offset to free entries */
 } __attribute__((__packed__));
 
 struct hshmem_pkt {
@@ -103,14 +104,18 @@ struct hshmem_pkt {
  * Host dequeues busy buffers from txring.
  * Host copies packets to its memory.
  * Host enqueues unused buffers to txfreering.
- */ 
+ */
 
 struct rte_hshmem;
 
-struct rte_hshmem * rte_hshmem_open_shmem(const char *path);
-void rte_hshmem_close(struct rte_hshmem *hshmem);
-int rte_hshmem_get_carrier(struct rte_hshmem *hshmem);
-int rte_hshmem_tx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts);
-int rte_hshmem_rx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts);
+struct rte_hshmem *rte_hshmem_open_shmem(const char *);
+void rte_hshmem_close(struct rte_hshmem *);
+int rte_hshmem_get_carrier(struct rte_hshmem *);
+int rte_hshmem_tx(struct rte_hshmem *, struct rte_mbuf **, uint16_t);
+int rte_hshmem_rx(struct rte_hshmem *, struct rte_mbuf **, uint16_t);
+struct hshmem_pkt *rte_hshmem_stoh(struct rte_hshmem *, void *);
+void *rte_hshmem_htos(struct rte_hshmem *, struct hshmem_pkt *);
+struct rte_ring *rte_hshmem_ring_stoh(struct rte_hshmem *, uintptr_t);
+void rte_hshmem_set_mpool(struct rte_hshmem *, struct rte_mempool *);
 
 #endif /* __HSHMEM_H__ */

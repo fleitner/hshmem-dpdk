@@ -62,7 +62,6 @@
 #define HSHMEM_LINK_SPEED_10G 10000
 
 #define RING_FREE_THRESHOLD 255
-#define MAX_BURST 64
 
 struct hshmem_adapter {
 	struct rte_ring *rxring;
@@ -102,7 +101,6 @@ get_va_align(struct rte_ring *prev, size_t size, int align)
 	return RTE_PTR_ALIGN(RTE_PTR_ADD(prev, size), align);
 }
 
-/* FIXME: move to the lib */
 static uint32_t
 get_ring_offset(struct hshmem_adapter *adapter, struct rte_ring *ring)
 {
@@ -110,22 +108,88 @@ get_ring_offset(struct hshmem_adapter *adapter, struct rte_ring *ring)
 }
 
 static struct hshmem_pkt_pmd *
-__get_pkt_pmd(struct rte_mbuf *mbuf)
+hshmem_pkt_stoh(struct hshmem_adapter *adapter, void *addr)
 {
-	return (struct hshmem_pkt_pmd *)rte_mbuf_to_baddr(mbuf);
+	char *ptr = (char *)adapter->ivshmem + (uintptr_t)addr;
+	return (struct hshmem_pkt_pmd *)ptr;
+}
 
+static void *
+hshmem_pkt_htos(struct hshmem_adapter *adapter, struct hshmem_pkt_pmd *pkt)
+{
+	uintptr_t offset = (uintptr_t)pkt - (uintptr_t)adapter->ivshmem;
+	return (void *)offset;
 }
 
 static struct hshmem_pkt_pmd *
-hshmem_get_pkt_pmd(struct rte_mbuf *mbuf)
+__get_pkt_from_mbuf(struct rte_mbuf *mbuf)
 {
-	struct hshmem_pkt_pmd *pkt = __get_pkt_pmd(mbuf);
+	struct hshmem_pkt_pmd *pkt;
 
+	pkt = (struct hshmem_pkt_pmd *)rte_mbuf_to_baddr(mbuf);
 	pkt->pkt.reserved = 0;
-	pkt->pkt.len = rte_pktmbuf_pkt_len(mbuf);
 	pkt->mbuf = mbuf;
 
 	return pkt;
+}
+
+static struct hshmem_pkt_pmd *
+hshmem_get_pkt_from_mbuf(struct rte_mbuf *mbuf)
+{
+	struct hshmem_pkt_pmd *pkt = __get_pkt_from_mbuf(mbuf);
+
+	pkt->pkt.len = rte_pktmbuf_pkt_len(mbuf);
+	return pkt;
+}
+
+static struct rte_mbuf *
+hshmem_get_mbuf_from_pkt(struct hshmem_pkt_pmd *hshpkt)
+{
+	struct rte_mbuf *mbuf = hshpkt->mbuf;
+
+	mbuf->pkt_len = hshpkt->pkt.len;
+	mbuf->data_len = hshpkt->pkt.len;
+	mbuf->next = NULL;
+
+	return mbuf;
+}
+
+
+static inline uint64_t
+hshmem_pkt_alloc_bulk(struct hshmem_adapter *adapter, void **addrs, int nb_pkts)
+{
+	struct rte_mbuf *mbuf[HSHMEM_MAX_BURST];
+	int cnt;
+	int i;
+
+	/* FIXME: RTE_ASSERT(nb_pkts <= HSHMEM_MAX_BURST); */
+	cnt = rte_pktmbuf_alloc_bulk(adapter->mp, mbuf, nb_pkts);
+	for (i = 0; i < cnt; i++) {
+		addrs[i] = hshmem_pkt_htos(adapter, __get_pkt_from_mbuf(mbuf[i]));
+	}
+
+	return cnt;
+
+}
+
+static inline uint16_t
+hshmem_refill_ring(struct hshmem_adapter *adapter, struct rte_ring *ring,
+		   int nb_pkts)
+{
+	void *addrs[HSHMEM_MAX_BURST];
+	int bsz;
+	int n;
+	int cnt;
+
+	n = 0;
+	while (n < nb_pkts) {
+		bsz = RTE_MIN(nb_pkts - n, HSHMEM_MAX_BURST);
+		cnt = hshmem_pkt_alloc_bulk(adapter, addrs, bsz);
+		rte_ring_sp_enqueue_bulk(ring, addrs, cnt);
+		n += cnt;
+	}
+
+	return n;
 }
 
 /*
@@ -236,13 +300,16 @@ hshmem_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 			  __rte_unused const struct rte_eth_rxconf *rx_conf,
 			  __rte_unused struct rte_mempool *mb_pool)
 {
+	struct hshmem_adapter *adapter = get_adapter(dev);
 	/* Multiqueue not supported */
 	HSHMEM_DEBUG("dev %p rxq %d socket: %d\n", dev, rx_queue_id, socket_id);
 
 	if (rx_queue_id != 0)
 		return -EINVAL;
 
-	dev->data->rx_queues[rx_queue_id] = get_adapter(dev);
+	dev->data->rx_queues[rx_queue_id] = adapter;
+
+	hshmem_refill_ring(adapter, adapter->rxfreering, RING_FREE_THRESHOLD);
 
 	return 0;
 }
@@ -293,51 +360,37 @@ static struct eth_dev_ops hshmem_eth_dev_ops = {
 	.tx_queue_release       = hshmem_dev_tx_queue_release,
 };
 
-static inline uint16_t
-hshmem_refill_ring(struct rte_mempool *mp, struct rte_ring *ring, int nb_pkts)
-{
-	struct rte_mbuf *pkts[MAX_BURST];
-	int n;
-	int bsize;
-	int fbufs;
-
-	n = 0;
-	while (n < nb_pkts) {
-		bsize = RTE_MIN(nb_pkts - n, MAX_BURST);
-		fbufs = rte_pktmbuf_alloc_bulk(mp, pkts, bsize);
-		rte_ring_sp_enqueue_bulk(ring, (void **)pkts, fbufs);
-		n += fbufs;
-	}
-
-	return n;
-}
-
 static uint16_t
 hshmem_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
-	static struct hshmem_pkt_pmd *hshpkt[MAX_BURST];
+	static void *pktoff[HSHMEM_MAX_BURST];
+	struct hshmem_pkt_pmd *hshpkt;
 	struct hshmem_adapter *adapter = (struct hshmem_adapter *)rx_queue;
 	struct rte_ring *rx = adapter->rxring;
 	struct rte_ring *rxfree = adapter->rxfreering;
 	uint16_t idx;
 	uint16_t ndq;
+	uint16_t cnt;
 
 	if (!adapter->stopped)
 		return 0;
 
-	if (nb_pkts > MAX_BURST)
-		nb_pkts = MAX_BURST;
+	if (nb_pkts > HSHMEM_MAX_BURST)
+		nb_pkts = HSHMEM_MAX_BURST;
 
-	ndq = rte_ring_sc_dequeue_burst(rx, (void **)hshpkt, nb_pkts);
+	ndq = rte_ring_sc_dequeue_burst(rx, pktoff, nb_pkts);
+	/* FIXME: needs optimization */
 	for (idx = 0; idx < ndq; idx++) {
-		rx_pkts[idx] = hshpkt[idx]->mbuf;
-		rx_pkts[idx]->pkt_len = hshpkt[idx]->pkt.len;
-		rx_pkts[idx]->data_len = hshpkt[idx]->pkt.len;
-		rx_pkts[idx]->next = NULL;
+		hshpkt = hshmem_pkt_stoh(adapter, pktoff[idx]);
+		rx_pkts[idx] = hshmem_get_mbuf_from_pkt(hshpkt);
 	}
 
-	if (rte_ring_free_count(rxfree) > RING_FREE_THRESHOLD)
-		hshmem_refill_ring(adapter->mp, rxfree, RING_FREE_THRESHOLD);
+	cnt = rte_ring_free_count(rx);
+	if (cnt > RING_FREE_THRESHOLD) {
+		cnt = RTE_MIN((unsigned int)RING_FREE_THRESHOLD,
+			      rte_ring_free_count(rxfree));
+		hshmem_refill_ring(adapter, rxfree, cnt);
+	}
 
 	return ndq;
 }
@@ -353,15 +406,14 @@ hshmem_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	uint16_t i;
 	uint16_t cnt;
 
-	if (!adapter->stopped)
-		return 0;
+	/* FIXME: check for stopped ring */
 
 	cnt = 0;
 	i = 0;
 	while (i < nb_pkts) {
 		mbuf = tx_pkts[i++];
-		pkt = hshmem_get_pkt_pmd(mbuf);
-		if (rte_ring_sp_enqueue(tx, pkt)) {
+		pkt = hshmem_get_pkt_from_mbuf(mbuf);
+		if (rte_ring_sp_enqueue(tx, hshmem_pkt_htos(adapter, pkt))) {
 			rte_pktmbuf_free(mbuf);
 			continue;
 		}
@@ -371,8 +423,10 @@ hshmem_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 	i = RTE_MIN(rte_ring_count(txfree), (unsigned int)RING_FREE_THRESHOLD);
 	while (i > 0) {
-		rte_ring_sc_dequeue(txfree, (void **)&mbuf);
-		rte_pktmbuf_free(mbuf);
+		void *ptr;
+		rte_ring_sc_dequeue(txfree, &ptr);
+		pkt = hshmem_pkt_stoh(adapter, ptr);
+		rte_pktmbuf_free(pkt->mbuf);
 		i--;
 	}
 

@@ -34,6 +34,7 @@
 #include <rte_memcpy.h>
 
 #include "rte_hshmem.h"
+#include "rte_bulk.h"
 
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -43,22 +44,49 @@
 #include <unistd.h>
 #include <errno.h>
 
-
 struct rte_hshmem {
+	void *ivshmem;
+	struct rte_mempool *mb_pool;
 	struct rte_ring *rxring;
 	struct rte_ring *rxfreering;
 	struct rte_ring *txring;
 	struct rte_ring *txfreering;
 	int stopped;
-	struct hshmem_header *header;
 	uint8_t mac_addr[ETHER_ADDR_LEN]; /* FIXME: not used */
-	void *ivshmem;
+	struct hshmem_header *header;
 };
-static struct rte_ring *
-get_ring_ptr(struct rte_hshmem *hshmem, uint32_t offset)
+
+struct hshmem_pkt *
+rte_hshmem_stoh(struct rte_hshmem *hshmem, void *addr)
 {
-	char *ptr = (char *)hshmem->ivshmem + offset;
+	char *ptr = (char *)hshmem->ivshmem + (uintptr_t)addr;
+	return (struct hshmem_pkt *)ptr;
+}
+
+void *
+rte_hshmem_htos(struct rte_hshmem *hshmem, struct hshmem_pkt *pkt)
+{
+	uintptr_t offset = (uintptr_t)pkt - (uintptr_t)hshmem->ivshmem;
+	return (void *)offset;
+}
+
+uintptr_t
+rte_hshmem_ring_htos(struct rte_hshmem *hshmem, struct rte_ring *ring)
+{
+	return (uintptr_t)ring - (uintptr_t)hshmem->ivshmem;
+}
+
+struct rte_ring *
+rte_hshmem_ring_stoh(struct rte_hshmem *hshmem, uintptr_t addr)
+{
+	char *ptr = (char *)hshmem->ivshmem + addr;
 	return (struct rte_ring *)ptr;
+}
+
+void
+rte_hshmem_set_mpool(struct rte_hshmem *hshmem, struct rte_mempool *mp)
+{
+	hshmem->mb_pool = mp;
 }
 
 struct rte_hshmem *
@@ -94,10 +122,12 @@ rte_hshmem_open_shmem(const char *path)
 	hshmem->ivshmem = ivshmem;
 	hshmem->header = header;
 	hshmem->stopped = 0;
-	hshmem->rxring = get_ring_ptr(hshmem, header->rxring_offset);
-	hshmem->rxfreering = get_ring_ptr(hshmem, header->rxfreering_offset);
-	hshmem->txring = get_ring_ptr(hshmem, header->txring_offset);
-	hshmem->txfreering = get_ring_ptr(hshmem, header->txfreering_offset);
+	hshmem->rxring = rte_hshmem_ring_stoh(hshmem, header->rxring_offset);
+	hshmem->rxfreering = rte_hshmem_ring_stoh(hshmem,
+						  header->rxfreering_offset);
+	hshmem->txring = rte_hshmem_ring_stoh(hshmem, header->txring_offset);
+	hshmem->txfreering = rte_hshmem_ring_stoh(hshmem,
+						  header->txfreering_offset);
 
 out:
 	return hshmem;
@@ -106,7 +136,7 @@ err_supp:
 	munmap(ivshmem, HSHMEM_IVSHMEM_SIZE);
 err_mmap:
 	rte_free(hshmem);
-	goto out;
+	return NULL;
 }
 
 void
@@ -122,14 +152,73 @@ rte_hshmem_get_carrier(struct rte_hshmem *hshmem)
 	return hshmem->stopped ? 1 : 0;
 }
 
-int
-rte_hshmem_tx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts)
+static void
+rte_hshmem_copy_from_mbuf(struct hshmem_pkt *pkt, struct rte_mbuf *mbuf)
 {
+	rte_memcpy(pkt->packet, rte_pktmbuf_mtod(mbuf, char *),
+		   mbuf->data_len);
+	pkt->len = mbuf->data_len;
+}
 
+static void
+rte_hshmem_copy_to_mbuf(struct rte_mbuf *mbuf, struct hshmem_pkt *pkt)
+{
+	rte_memcpy(rte_pktmbuf_mtod(mbuf, char *), pkt->packet, pkt->len);
+	mbuf->data_len = pkt->len;
 }
 
 int
-rte_hshmem_rx(struct rte_hshmem *hshmem, void **pkts, uint16_t nb_pkts)
+rte_hshmem_tx(struct rte_hshmem *hshmem, struct rte_mbuf **pkts,
+	      uint16_t nb_pkts)
 {
+	static void *pktoff[HSHMEM_MAX_BURST];
+	struct hshmem_pkt *hshpkt;
+	struct rte_ring *rx = hshmem->rxring;
+	struct rte_ring *rxfree = hshmem->rxfreering;
+	uint16_t idx;
+	uint16_t ndq;
 
+	/* FIXME check for stopped ring */
+
+	ndq = rte_ring_sc_dequeue_burst(rxfree, pktoff,
+					RTE_MIN(HSHMEM_MAX_BURST, nb_pkts));
+
+	for (idx = 0; idx < ndq; idx++) {
+		rte_hshmem_copy_from_mbuf(rte_hshmem_stoh(hshmem, pktoff[idx]),
+					  pkts[idx]);
+	}
+
+	rte_ring_sp_enqueue_bulk(rx, pktoff, ndq);
+
+	return idx;
+}
+
+int
+rte_hshmem_rx(struct rte_hshmem *hshmem, struct rte_mbuf **pkts,
+	      uint16_t nb_pkts)
+{
+	static void *pktoff[HSHMEM_MAX_BURST];
+	struct hshmem_pkt *hshpkt;
+	struct rte_ring *tx = hshmem->txring;
+	struct rte_ring *txfree = hshmem->txfreering;
+	uint16_t idx;
+	uint16_t ndq;
+	uint16_t cnt;
+
+	/* FIXME check for stopped ring */
+
+	ndq = rte_ring_sc_dequeue_burst(tx, pktoff,
+				        RTE_MIN(nb_pkts, HSHMEM_MAX_BURST));
+
+	cnt = rte_pktmbuf_alloc_bulk(hshmem->mb_pool, pkts, ndq);
+
+	/* FIXME: dropping packets if ndq > cnt */
+	for (idx = 0; idx < cnt; idx++) {
+		rte_hshmem_copy_to_mbuf(pkts[idx],
+					rte_hshmem_stoh(hshmem, pktoff[idx]));
+	}
+
+	rte_ring_sp_enqueue_bulk(txfree, pktoff, ndq);
+
+	return idx;
 }
