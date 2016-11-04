@@ -1,0 +1,15 @@
+DPDK_2.0 {
+	global:
+
+	rte_hshmem_open_shmem;
+	rte_hshmem_close;
+	rte_hshmem_get_carrier;
+	rte_hshmem_tx;
+	rte_hshmem_rx;
+	rte_hshmem_stoh;
+	rte_hshmem_htos;
+	rte_hshmem_ring_stoh;
+	rte_hshmem_set_mpool;
+
+	local: *;
+};
