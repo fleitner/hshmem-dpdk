@@ -423,7 +423,7 @@ hshmem_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 	i = RTE_MIN(rte_ring_count(txfree), (unsigned int)RING_FREE_THRESHOLD);
 	while (i > 0) {
-		void *ptr;
+		void *ptr = NULL;
 		rte_ring_sc_dequeue(txfree, &ptr);
 		pkt = hshmem_pkt_stoh(adapter, ptr);
 		rte_pktmbuf_free(pkt->mbuf);
