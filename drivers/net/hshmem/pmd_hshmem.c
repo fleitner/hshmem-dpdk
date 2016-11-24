@@ -164,6 +164,9 @@ hshmem_pkt_alloc_bulk(struct hshmem_adapter *adapter, void **addrs, int nb_pkts)
 
 	/* FIXME: RTE_ASSERT(nb_pkts <= HSHMEM_MAX_BURST); */
 	cnt = rte_pktmbuf_alloc_bulk(adapter->mp, mbuf, nb_pkts);
+	if (cnt <= 0)
+		return 0;
+
 	for (i = 0; i < cnt; i++) {
 		addrs[i] = hshmem_pkt_htos(adapter, __get_pkt_from_mbuf(mbuf[i]));
 	}
