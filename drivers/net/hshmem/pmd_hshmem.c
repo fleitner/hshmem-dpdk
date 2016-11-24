@@ -188,6 +188,9 @@ hshmem_refill_ring(struct hshmem_adapter *adapter, struct rte_ring *ring,
 	while (n < nb_pkts) {
 		bsz = RTE_MIN(nb_pkts - n, HSHMEM_MAX_BURST);
 		cnt = hshmem_pkt_alloc_bulk(adapter, addrs, bsz);
+		if (cnt <= 0)
+			return n;
+
 		rte_ring_sp_enqueue_bulk(ring, addrs, cnt);
 		n += cnt;
 	}
