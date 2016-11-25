@@ -576,7 +576,9 @@ hshmem_init_mempool(struct hshmem_adapter *adapter)
 	}
 
 	mp = rte_mempool_xmem_create("hshmem_ivshmem", elt_num, elt_size,
-				     0, 0, NULL, NULL, NULL, NULL,
+				     0, 0,
+				     rte_pktmbuf_pool_init, NULL,
+				     rte_pktmbuf_init, NULL,
 				     0, 0, va, pa, pg_num, pg_shift);
 	if (!mp) {
 		free(pa);
