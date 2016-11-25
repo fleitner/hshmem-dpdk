@@ -159,20 +159,20 @@ static inline uint64_t
 hshmem_pkt_alloc_bulk(struct hshmem_adapter *adapter, void **addrs, int nb_pkts)
 {
 	struct rte_mbuf *mbuf[HSHMEM_MAX_BURST];
-	int cnt;
+	int ret;
 	int i;
 
 	/* FIXME: RTE_ASSERT(nb_pkts <= HSHMEM_MAX_BURST); */
-	cnt = rte_pktmbuf_alloc_bulk(adapter->mp, mbuf, nb_pkts);
-	if (cnt <= 0)
+	ret = rte_pktmbuf_alloc_bulk(adapter->mp, mbuf, nb_pkts);
+	if (ret)
 		return 0;
 
-	for (i = 0; i < cnt; i++) {
-		addrs[i] = hshmem_pkt_htos(adapter, __get_pkt_from_mbuf(mbuf[i]));
+	for (i = 0; i < nb_pkts; i++) {
+		addrs[i] = hshmem_pkt_htos(adapter,
+					   __get_pkt_from_mbuf(mbuf[i]));
 	}
 
-	return cnt;
-
+	return nb_pkts;
 }
 
 static inline uint16_t
