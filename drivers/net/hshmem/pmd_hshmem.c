@@ -378,7 +378,7 @@ hshmem_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	uint16_t ndq;
 	uint16_t cnt;
 
-	if (!adapter->stopped)
+	if (adapter->stopped)
 		return 0;
 
 	if (nb_pkts > HSHMEM_MAX_BURST)
