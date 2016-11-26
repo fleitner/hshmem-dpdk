@@ -70,6 +70,8 @@ struct hshmem_adapter {
 	struct rte_ring *txfreering;
 	struct rte_mempool *mp;
 	int stopped;
+	rte_atomic64_t rx_pkts;
+	rte_atomic64_t tx_pkts;
 	struct hshmem_header *header;
 	uint8_t mac_addr[ETHER_ADDR_LEN];
 	void *ivshmem;
@@ -276,16 +278,29 @@ hshmem_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 }
 
 static void
-hshmem_dev_stats_get(__rte_unused struct rte_eth_dev *dev,
-		     __rte_unused struct rte_eth_stats *stats)
+hshmem_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
-	/* FIXME: Implement */
+	struct hshmem_adapter *adapter;
+
+	if ((dev == NULL) || (stats == NULL))
+		return;
+
+	adapter = get_adapter(dev);
+	stats->ipackets = rte_atomic64_read(&adapter->rx_pkts);
+	stats->opackets = rte_atomic64_read(&adapter->tx_pkts);
 }
 
 static void
-hshmem_dev_stats_reset(__rte_unused struct rte_eth_dev *dev)
+hshmem_dev_stats_reset(struct rte_eth_dev *dev)
 {
-	/* FIXME: Implement */
+	struct hshmem_adapter *adapter;
+
+	if (dev == NULL)
+		return;
+
+	adapter = get_adapter(dev);
+	rte_atomic64_set(&adapter->rx_pkts, 0);
+	rte_atomic64_set(&adapter->tx_pkts, 0);
 }
 
 static int
@@ -391,6 +406,8 @@ hshmem_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rx_pkts[idx] = hshmem_get_mbuf_from_pkt(hshpkt);
 	}
 
+	rte_atomic64_add(&(adapter->rx_pkts), ndq);
+
 	cnt = rte_ring_free_count(rx);
 	if (cnt > RING_FREE_THRESHOLD) {
 		cnt = RTE_MIN((unsigned int)RING_FREE_THRESHOLD,
@@ -426,6 +443,8 @@ hshmem_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		cnt++;
 	}
+
+	rte_atomic64_add(&(adapter->tx_pkts), cnt);
 
 	i = RTE_MIN(rte_ring_count(txfree), (unsigned int)RING_FREE_THRESHOLD);
 	while (i > 0) {
