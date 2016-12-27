@@ -203,22 +203,24 @@ rte_hshmem_rx(struct rte_hshmem *hshmem, struct rte_mbuf **pkts,
 	struct rte_ring *txfree = hshmem->txfreering;
 	uint16_t idx;
 	uint16_t ndq;
-	uint16_t cnt;
+	uint16_t ret;
 
 	/* FIXME check for stopped ring */
 
 	ndq = rte_ring_sc_dequeue_burst(tx, pktoff,
 				        RTE_MIN(nb_pkts, HSHMEM_MAX_BURST));
 
-	cnt = rte_pktmbuf_alloc_bulk(hshmem->mempool, pkts, ndq);
+	ret = rte_pktmbuf_alloc_bulk(hshmem->mempool, pkts, ndq);
+	if (ret) {
+		return 0;
+	}
 
-	/* FIXME: dropping packets if ndq > cnt */
-	for (idx = 0; idx < cnt; idx++) {
+	for (idx = 0; idx < ndq; idx++) {
 		rte_hshmem_copy_to_mbuf(pkts[idx],
 					rte_hshmem_stoh(hshmem, pktoff[idx]));
 	}
 
-	rte_ring_sp_enqueue_bulk(txfree, pktoff, ndq);
+	rte_ring_sp_enqueue_bulk(txfree, pktoff, idx);
 
 	return idx;
 }
