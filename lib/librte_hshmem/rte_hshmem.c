@@ -165,6 +165,7 @@ rte_hshmem_copy_to_mbuf(struct rte_mbuf *mbuf, struct hshmem_pkt *pkt)
 {
 	rte_memcpy(rte_pktmbuf_mtod(mbuf, char *), pkt->packet, pkt->len);
 	mbuf->data_len = pkt->len;
+	mbuf->pkt_len = pkt->len;
 }
 
 int
