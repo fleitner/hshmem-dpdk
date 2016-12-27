@@ -66,7 +66,7 @@ rte_hshmem_stoh(struct rte_hshmem *hshmem, void *addr)
 void *
 rte_hshmem_htos(struct rte_hshmem *hshmem, struct hshmem_pkt *pkt)
 {
-	uintptr_t offset = (uintptr_t)pkt - (uintptr_t)hshmem->ivshmem;
+	uintptr_t offset = (char *)pkt - (char *)hshmem->ivshmem;
 	return (void *)offset;
 }
 

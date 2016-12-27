@@ -119,7 +119,7 @@ hshmem_pkt_stoh(struct hshmem_adapter *adapter, void *addr)
 static void *
 hshmem_pkt_htos(struct hshmem_adapter *adapter, struct hshmem_pkt_pmd *pkt)
 {
-	uintptr_t offset = (uintptr_t)pkt - (uintptr_t)adapter->ivshmem;
+	uintptr_t offset = (char *)pkt - (char *)adapter->ivshmem;
 	return (void *)offset;
 }
 
