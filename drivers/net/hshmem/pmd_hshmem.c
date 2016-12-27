@@ -436,7 +436,8 @@ hshmem_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	while (i < nb_pkts) {
 		mbuf = tx_pkts[i++];
 		pkt = hshmem_get_pkt_from_mbuf(mbuf);
-		if (rte_ring_sp_enqueue(tx, hshmem_pkt_htos(adapter, pkt))) {
+		if (mbuf->pool != adapter->mp
+		    || rte_ring_sp_enqueue(tx, hshmem_pkt_htos(adapter, pkt))) {
 			rte_pktmbuf_free(mbuf);
 			continue;
 		}
