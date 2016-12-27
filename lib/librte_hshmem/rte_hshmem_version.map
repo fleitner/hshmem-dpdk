@@ -9,7 +9,7 @@ DPDK_2.0 {
 	rte_hshmem_stoh;
 	rte_hshmem_htos;
 	rte_hshmem_ring_stoh;
-	rte_hshmem_set_mpool;
+	rte_hshmem_set_mempool;
 
 	local: *;
 };
