@@ -116,6 +116,6 @@ int rte_hshmem_rx(struct rte_hshmem *, struct rte_mbuf **, uint16_t);
 struct hshmem_pkt *rte_hshmem_stoh(struct rte_hshmem *, void *);
 void *rte_hshmem_htos(struct rte_hshmem *, struct hshmem_pkt *);
 struct rte_ring *rte_hshmem_ring_stoh(struct rte_hshmem *, uintptr_t);
-void rte_hshmem_set_mpool(struct rte_hshmem *, struct rte_mempool *);
+void rte_hshmem_set_mempool(struct rte_hshmem *, struct rte_mempool *);
 
 #endif /* __HSHMEM_H__ */

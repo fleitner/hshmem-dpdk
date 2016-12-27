@@ -46,7 +46,7 @@
 
 struct rte_hshmem {
 	void *ivshmem;
-	struct rte_mempool *mb_pool;
+	struct rte_mempool *mempool;
 	struct rte_ring *rxring;
 	struct rte_ring *rxfreering;
 	struct rte_ring *txring;
@@ -84,9 +84,9 @@ rte_hshmem_ring_stoh(struct rte_hshmem *hshmem, uintptr_t addr)
 }
 
 void
-rte_hshmem_set_mpool(struct rte_hshmem *hshmem, struct rte_mempool *mp)
+rte_hshmem_set_mempool(struct rte_hshmem *hshmem, struct rte_mempool *mempool)
 {
-	hshmem->mb_pool = mp;
+	hshmem->mempool = mempool;
 }
 
 struct rte_hshmem *
@@ -210,7 +210,7 @@ rte_hshmem_rx(struct rte_hshmem *hshmem, struct rte_mbuf **pkts,
 	ndq = rte_ring_sc_dequeue_burst(tx, pktoff,
 				        RTE_MIN(nb_pkts, HSHMEM_MAX_BURST));
 
-	cnt = rte_pktmbuf_alloc_bulk(hshmem->mb_pool, pkts, ndq);
+	cnt = rte_pktmbuf_alloc_bulk(hshmem->mempool, pkts, ndq);
 
 	/* FIXME: dropping packets if ndq > cnt */
 	for (idx = 0; idx < cnt; idx++) {
