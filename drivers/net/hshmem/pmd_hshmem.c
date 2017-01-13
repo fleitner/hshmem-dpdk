@@ -39,7 +39,6 @@
 
 #include <rte_hshmem.h>
 #include "pmd_hshmem.h"
-#include "rte_bulk.h"
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -58,7 +57,7 @@
 #define HSHMEM_TXQ_MAX 1
 #define HSHMEM_RXQ_MAX 1
 
-#define HSHMEM_LINK_FULL_DUPLEX 2
+#define HSHMEM_LINK_FULL_DUPLEX 1
 #define HSHMEM_LINK_SPEED_10G 10000
 
 #define RING_FREE_THRESHOLD 255

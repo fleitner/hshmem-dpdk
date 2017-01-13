@@ -34,7 +34,6 @@
 #include <rte_memcpy.h>
 
 #include "rte_hshmem.h"
-#include "rte_bulk.h"
 
 #include <sys/stat.h>
 #include <sys/mman.h>
