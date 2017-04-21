@@ -268,7 +268,7 @@ hshmem_dev_stop(struct rte_eth_dev *dev)
 
 static void
 hshmem_dev_infos_get(__rte_unused struct rte_eth_dev *dev,
-                     struct rte_eth_dev_info *dev_info)
+		     struct rte_eth_dev_info *dev_info)
 {
 	dev_info->driver_name = "hshmem_ring";
 	dev_info->max_rx_queues = HSHMEM_RXQ_MAX;
@@ -609,49 +609,47 @@ hshmem_init_mempool(struct hshmem_adapter *adapter)
 static int
 rte_hshmem_ring_pmd_devinit(const char *name, __rte_unused const char *params)
 {
-    struct rte_eth_dev_data *data;
+	struct rte_eth_dev_data *data;
 	struct hshmem_adapter *adapter;
 	struct rte_eth_dev *eth_dev;
 	char path[PATH_MAX];
-	void  *ivshmem;
+	void *ivshmem;
 	int fd;
 	int ret;
 
-    if (name == NULL) {
+	if (name == NULL) {
 		RTE_LOG(ERR, PMD, "No name passed, aborting\n");
-        return -EINVAL;
-    }
+		return -EINVAL;
+	}
 
 	RTE_LOG(INFO, PMD, "Initializing pmd_hshmem_ring_pmd for %s\n", name);
 
-
-
-    data = rte_zmalloc_socket(name, sizeof(*data), 0, rte_socket_id());
-    if (data == NULL) {
+	data = rte_zmalloc_socket(name, sizeof(*data), 0, rte_socket_id());
+	if (data == NULL) {
 		RTE_LOG(ERR, PMD, "Failed to allocate rte dev data memory\n");
-        return -ENOMEM;
-    }
+		return -ENOMEM;
+	}
 
-    adapter = rte_zmalloc_socket(name, sizeof(*adapter), 0, rte_socket_id());
-    if (adapter == NULL) {
+	adapter = rte_zmalloc_socket(name, sizeof(*adapter), 0, rte_socket_id());
+	if (adapter == NULL) {
 		RTE_LOG(ERR, PMD, "Failed to allocate adapter memory\n");
-        rte_free(data);
-        return -ENOMEM;
-    }
+		rte_free(data);
+		return -ENOMEM;
+	}
 
 	eth_dev = rte_eth_dev_allocate(name, RTE_ETH_DEV_VIRTUAL);
 	if (eth_dev == NULL) {
 		RTE_LOG(ERR, PMD, "Failed to allocate rte device\n");
-        free(data);
-        free(adapter);
+		free(data);
+		free(adapter);
 		return -EINVAL;
-    }
+	}
 
 	eth_dev->dev_ops = &hshmem_eth_dev_ops;
 	eth_dev->rx_pkt_burst = &hshmem_recv_pkts;
 	eth_dev->tx_pkt_burst = &hshmem_xmit_pkts;
-    data->dev_private = adapter;
-    eth_dev->data = data;
+	data->dev_private = adapter;
+	eth_dev->data = data;
 
 	adapter->stopped = 0;
 
@@ -687,36 +685,37 @@ rte_hshmem_ring_pmd_devinit(const char *name, __rte_unused const char *params)
 static int
 rte_hshmem_pmd_devuninit(const char *name)
 {
-    struct rte_eth_dev_data *data;
+	struct rte_eth_dev_data *data;
 	struct hshmem_adapter *adapter;
 	struct rte_eth_dev *eth_dev;
 
-    if (name == NULL) {
-        return -1;
-    }
-
-    RTE_LOG(INFO, PMD, "Closing hshmem_ring ethdev %s\n", name); 
-
-    /* find the ethdev entry */
-	eth_dev = rte_eth_dev_allocated(name);
-	if (eth_dev == NULL)
+	if (name == NULL) {
 		return -1;
+	}
 
-    data = eth_dev->data;
-    adapter = get_adapter(eth_dev);
-    munmap(adapter->ivshmem, HSHMEM_IVSHMEM_SIZE);
-    rte_free(adapter);
-    rte_free(data);
-    rte_eth_dev_release_port(eth_dev);
+	RTE_LOG(INFO, PMD, "Closing hshmem_ring ethdev %s\n", name);
+
+	/* find the ethdev entry */
+	eth_dev = rte_eth_dev_allocated(name);
+	if (eth_dev == NULL) {
+		return -1;
+	}
+
+	data = eth_dev->data;
+	adapter = get_adapter(eth_dev);
+	munmap(adapter->ivshmem, HSHMEM_IVSHMEM_SIZE);
+	rte_free(adapter);
+	rte_free(data);
+	rte_eth_dev_release_port(eth_dev);
 
 	return 0;
 }
 
 static struct rte_driver rte_hshmem_ring_driver = {
-    .name = "hshmem_ring",
+	.name = "hshmem_ring",
 	.type = PMD_VDEV,
 	.init = rte_hshmem_ring_pmd_devinit,
-    .uninit = rte_hshmem_pmd_devuninit
+	.uninit = rte_hshmem_pmd_devuninit
 };
 
 PMD_REGISTER_DRIVER(rte_hshmem_ring_driver);
