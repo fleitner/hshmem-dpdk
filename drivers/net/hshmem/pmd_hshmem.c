@@ -32,6 +32,7 @@
 
 #include <rte_log.h>
 #include <rte_ethdev.h>
+#include <rte_kvargs.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_tailq.h>
@@ -709,13 +710,30 @@ static struct rte_driver rte_hshmem_driver = {
 
 PMD_REGISTER_DRIVER(rte_hshmem_driver);
 
+#define HSHMEM_MEM_PATH_DEFAULT "/dev/shm/ivsh0"
+#define HSHMEM_MEM_PATH_ARG "mem-path"
+static const char *valid_arguments[] = {
+	HSHMEM_MEM_PATH_ARG,
+	NULL,
+};
+
+static int
+rte_hshmem_ring_set_mem_path(const char *key __rte_unused,
+			     const char *value,
+			     void *extra_args __rte_unused)
+{
+	extra_args = (void *)strdup(value);
+	return 0;
+}
+
 static int
 rte_hshmem_ring_pmd_devinit(const char *name, __rte_unused const char *params)
 {
 	struct rte_eth_dev_data *data;
 	struct hshmem_adapter *adapter;
 	struct rte_eth_dev *eth_dev;
-	char path[PATH_MAX];
+	struct rte_kvargs *kvlist;
+	char *path = NULL;
 	void *ivshmem;
 	int fd;
 	int ret;
@@ -726,6 +744,24 @@ rte_hshmem_ring_pmd_devinit(const char *name, __rte_unused const char *params)
 	}
 
 	RTE_LOG(INFO, PMD, "Initializing pmd_hshmem_ring_pmd for %s\n", name);
+
+	kvlist = rte_kvargs_parse(params, valid_arguments);
+	if (kvlist == NULL) {
+		return -EINVAL;
+	}
+
+	if (rte_kvargs_count(kvlist, HSHMEM_MEM_PATH_ARG) == 1) {
+		ret = rte_kvargs_process(kvlist, HSHMEM_MEM_PATH_ARG,
+		                         &rte_hshmem_ring_set_mem_path,
+					 &path);
+		if (ret < 0)
+			return ret;
+	}
+	else {
+		path = strdup(HSHMEM_MEM_PATH_DEFAULT);
+	}
+
+	rte_kvargs_free(kvlist);
 
 	data = rte_zmalloc_socket(name, sizeof(*data), 0, rte_socket_id());
 	if (data == NULL) {
@@ -756,12 +792,14 @@ rte_hshmem_ring_pmd_devinit(const char *name, __rte_unused const char *params)
 
 	adapter->stopped = 0;
 
-	fd = open("/dev/shm/ivsh0", O_RDWR);
+	RTE_LOG(INFO, PMD, "Opening shared file %s\n", path);
+	fd = open(path, O_RDWR);
 	if (fd < 0) {
 		HSHMEM_DEBUG("Unable to open %s: %d\n", path, fd);
 		return fd;
 	}
 
+	free(path);
 	ivshmem = mmap(NULL, HSHMEM_IVSHMEM_SIZE, PROT_READ | PROT_WRITE,
 		       MAP_SHARED | MAP_LOCKED, fd, 0);
 	close(fd);
