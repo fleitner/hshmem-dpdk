@@ -267,9 +267,10 @@ hshmem_dev_stop(struct rte_eth_dev *dev)
 }
 
 static void
-hshmem_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
+hshmem_dev_infos_get(__rte_unused struct rte_eth_dev *dev,
+		     struct rte_eth_dev_info *dev_info)
 {
-	dev_info->driver_name = dev->driver->pci_drv.name;
+	dev_info->driver_name = "hshmem";
 	dev_info->max_rx_queues = HSHMEM_RXQ_MAX;
 	dev_info->max_tx_queues = HSHMEM_TXQ_MAX;
 	dev_info->min_rx_bufsize = HSHMEM_MIN_FRAME_LEN;
