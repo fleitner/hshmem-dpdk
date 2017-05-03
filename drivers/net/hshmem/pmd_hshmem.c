@@ -83,7 +83,7 @@ struct hshmem_adapter {
 struct hshmem_pkt_pmd {
 	struct hshmem_pkt pkt;
 	struct rte_mbuf *mbuf;
-} __attribute__((__packed__));
+} __rte_cache_aligned;
 
 static struct hshmem_adapter *
 get_adapter(struct rte_eth_dev *eth_dev)

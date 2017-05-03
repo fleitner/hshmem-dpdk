@@ -89,7 +89,7 @@ struct hshmem_pkt {
 	char packet[HSHMEM_MAX_FRAME_LEN];
 	uint32_t reserved;
 	uint32_t len;
-} __attribute__((__packed__));
+} __rte_cache_aligned;
 
 /* RX direction:
  * Host dequeues allocated but unused buffers from rxfreering
